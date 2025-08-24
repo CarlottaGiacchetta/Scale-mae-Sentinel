@@ -4,6 +4,10 @@ import torch
 import util.misc as misc
 from torchvision import datasets, transforms
 from torchvision.datasets import ImageFolder
+import rasterio
+import numpy as np
+from torch.utils.data import Dataset
+from PIL import Image
 
 from .airound import AIROUND_DATASET_STATS
 from .cvbrct import CVBRCT_DATASET_STATS
@@ -31,7 +35,89 @@ dataset_stats_lookup = {
     "ucmerced": UCMERCED_DATASET_STATS,
     "fmow": FMOW_DATASET_STATS,
 }
+from dataloaders.fmow_veg_geo import (
+    build_fmow_veg_sampler,
+    build_fmow_geo_sampler,
+)
+from dataloaders.fmow_sentinel import build_fmow_sentinel_sampler
 
+class FMOWSentinelEvalDataset(Dataset):
+    """
+    Dataset di valutazione per fMoW-Sentinel2 su 3 canali selezionati (VEG o GEO).
+    Accetta:
+      - path a una directory con struttura fMoW-Sentinel2 (split/category/...)
+      - oppure path a un file lista (ImageList-style) con righe: "<path_to_tif> <label>"
+      - oppure path a una CSV con colonne: path,label  (auto-detect semplice)
+
+    Emissione: (tensor CxHxW float32 normalizzato, label int)
+    """
+    def __init__(self, root_or_list: str, channels: list[int], transform: transforms.Compose):
+        self.channels = channels
+        self.transform = transform
+
+        p = os.path.expandvars(os.path.expanduser(root_or_list))
+        self.samples = []
+
+        if os.path.isdir(p):
+            # Cammina la dir e costruisci (path,label) usando i nomi category -> label
+            # mappa delle classi come negli altri dataset
+            from dataloaders.fmow_sentinel import CATEGORIES  # riusa la lista già definita
+            cat_to_idx = {c: i for i, c in enumerate(CATEGORIES)}
+            for cat in os.listdir(p):
+                cat_dir = os.path.join(p, cat)
+                if not os.path.isdir(cat_dir) or cat not in cat_to_idx:
+                    continue
+                lab = cat_to_idx[cat]
+                for root, _, files in os.walk(cat_dir):
+                    for f in files:
+                        if f.lower().endswith(".tif"):
+                            self.samples.append((os.path.join(root, f), lab))
+        elif os.path.isfile(p):
+            # Prova formato "path label" (ImageList)
+            with open(p, "r", encoding="utf-8") as fh:
+                head = fh.readline()
+            if "," in head and "path" in head and "label" in head:
+                # CSV minimale: path,label
+                import csv
+                with open(p, "r", encoding="utf-8") as fh:
+                    reader = csv.DictReader(fh)
+                    for row in reader:
+                        self.samples.append((os.path.expandvars(os.path.expanduser(row["path"])), int(row["label"])))
+            else:
+                # ImageList semplice
+                with open(p, "r", encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        parts = line.split()
+                        tifp = os.path.expandvars(os.path.expanduser(parts[0]))
+                        lab = int(parts[1]) if len(parts) > 1 else -1
+                        self.samples.append((tifp, lab))
+        else:
+            raise FileNotFoundError(f"Eval path non valido: {p}")
+
+        if len(self.samples) == 0:
+            raise RuntimeError(f"Nessun campione trovato in {p}")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def _read_tif(self, path: str) -> torch.Tensor:
+        # (C,H,W) float32
+        with rasterio.open(path) as src:
+            arr = src.read().astype(np.float32)
+        # seleziona canali 0-based
+        arr = arr[self.channels, :, :]  # (C_sel,H,W)
+        return torch.from_numpy(arr)
+
+    def __getitem__(self, idx: int):
+        path, label = self.samples[idx]
+        x = self._read_tif(path)  # (C,H,W) float32 grezzo
+        # La transform torchvision lavora anche su Tensor
+        if self.transform is not None:
+            x = self.transform(x)
+        return x, label
 
 def get_dataset_and_sampler(
     args,
@@ -44,6 +130,7 @@ def get_dataset_and_sampler(
     linprobe_finetune=False,
 ):
     dataset_type = config["data"]["type"]
+    print(dataset_type)
     if dataset_type == "NAIP":
         return build_naip_sampler(config, args, num_replicas, rank, transforms)
     elif dataset_type == "SENTINEL2":
@@ -119,6 +206,14 @@ def get_dataset_and_sampler(
                 sampler_train,
                 TransformCollateFnLabel(transforms, args.base_resolution),
             )
+    elif dataset_type in ("fmow_sentinel", "fmow-sentinel", "fmowsentinel"):
+        return build_fmow_sentinel_sampler(config, args, transforms, num_replicas, rank)
+
+    elif dataset_type in ("veg","VEG"):   # accetta anche type: VEG
+        return build_fmow_veg_sampler(config, args, transforms, num_replicas, rank)
+
+    elif dataset_type in ("geo","GEO"):   # accetta anche type: GEO
+        return build_fmow_geo_sampler(config, args, transforms, num_replicas, rank)
     else:
         raise NotImplementedError
 
@@ -156,7 +251,7 @@ class TransformCollateFnLabel:
 
 def get_eval_dataset_and_transform(
     eval_dataset_id="resisc",
-    eval_dataset_path="~/data/resisc",
+    eval_dataset_path="/leonardo_scratch/fast/IscrC_UMC/NWPU_RESISC45/NWPU-RESISC45",
     transforms_init=None,
     args=None,
 ):
@@ -185,6 +280,7 @@ def get_eval_dataset_and_transform(
         if os.path.isdir(eval_dataset_path):
             dataset_eval = ImageFolder(eval_dataset_path, transform=transform_eval)
         else:
+            print(eval_dataset_path)
             dataset_eval = ImageList(eval_dataset_path, transform=transform_eval)
 
     elif eval_dataset_id == "fmow":
@@ -216,7 +312,64 @@ def get_eval_dataset_and_transform(
             )
         dataset_eval = build_fmow(eval_dataset_path, transforms=transform_eval)
 
+    # ────────────── fMoW-Sentinel2 profilo VEG (B5,B6,B7 -> [4,5,6]) ──────────────
+    elif eval_dataset_id_l in ["veg"]:
+        # mean/std dalle tue stats sentinel (13-bande), slice sui canali usati
+        # se vuoi, potresti anche caricarli da config, ma qui restiamo self-contained
+        from dataloaders.fmow_sentinel import _FMOW_S2_MEAN as S2_MEAN, _FMOW_S2_STD as S2_STD  # type: ignore
+        channels = [4, 5, 6]
+        mean = torch.tensor(S2_MEAN[channels], dtype=torch.float32)
+        std  = torch.tensor(S2_STD[channels], dtype=torch.float32)
+
+        size = 224
+        if args is not None:
+            # args.eval_scale è una lista [56,112,224] o un int; prendiamo il max o l'int
+            if isinstance(args.eval_scale, (list, tuple)):
+                size = int(max(args.eval_scale))
+            elif isinstance(args.eval_scale, int):
+                size = args.eval_scale
+
+        transform_eval = transforms.Compose([
+            transforms.Resize(size),
+            transforms.CenterCrop(size),
+            transforms.ConvertImageDtype(torch.float32),  # in caso arrivi come uint16
+            transforms.Normalize(mean=mean, std=std),
+        ])
+        dataset_eval = FMOWSentinelEvalDataset(
+            root_or_list=eval_dataset_path,
+            channels=channels,
+            transform=transform_eval,
+        )
+
+    # ────────────── fMoW-Sentinel2 profilo GEO (B8,B11,B12 -> [7,10,11]) ──────────────
+    elif eval_dataset_id_l in ["geo"]:
+        from dataloaders.fmow_sentinel import _FMOW_S2_MEAN as S2_MEAN, _FMOW_S2_STD as S2_STD  # type: ignore
+        channels = [7, 10, 11]
+        mean = torch.tensor(S2_MEAN[channels], dtype=torch.float32)
+        std  = torch.tensor(S2_STD[channels], dtype=torch.float32)
+
+        size = 224
+        if args is not None:
+            if isinstance(args.eval_scale, (list, tuple)):
+                size = int(max(args.eval_scale))
+            elif isinstance(args.eval_scale, int):
+                size = args.eval_scale
+
+        transform_eval = transforms.Compose([
+            transforms.Resize(size),
+            transforms.CenterCrop(size),
+            transforms.ConvertImageDtype(torch.float32),
+            transforms.Normalize(mean=mean, std=std),
+        ])
+        dataset_eval = FMOWSentinelEvalDataset(
+            root_or_list=eval_dataset_path,
+            channels=channels,
+            transform=transform_eval,
+        )
+
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Unknown eval dataset id: {eval_dataset_id}")
 
     return dataset_eval, transform_eval
+
+    

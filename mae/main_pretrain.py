@@ -407,7 +407,7 @@ def main(args):
 
     if not isinstance(args.source_size, list):
         args.source_size = [args.source_size]
-    ########################################
+    #########################################
 
     if not args.eval_only:
         # Validate that all sizes in target_size are multiples of 16
@@ -428,11 +428,18 @@ def main(args):
         with open(args.config) as f:
             config = yaml.safe_load(f.read())
         args.data_config = config  # save on args so that it's prop'd to wandb
+        print(args.data_config)
+        
         WANDB_LOG_IMG_CONFIG.mean = np.array(config["data"]["mean"])
         WANDB_LOG_IMG_CONFIG.std = np.array(config["data"]["std"])
         WANDB_LOG_IMG_CONFIG.factor = config["data"]["vis_factor"]
+        
+        if config["data"]["channels"]:
+            WANDB_LOG_IMG_CONFIG.channels = np.array(config["data"]["channels"])
+            
+            
 
-        if config["data"]["type"] in ["fmow"]:
+        if config["data"]["type"] in ["fmow"] or config["data"]["type"] in ["veg"] or config["data"]["type"] in ["geo"] :
             # We read in an image from PIL and crop an area twice the size of input size
             # transforms_train crops it down to a the proper target_size
             transforms_init = tv_transforms.Compose(
@@ -499,8 +506,10 @@ def main(args):
 
     ########################### EVAL SPECIFIC SETUP ###########################
     # backwards compatability so running runs dont break
-
+    
     if hasattr(args, "eval_train_fnames"):
+        print('filenames')
+        print(args.eval_train_fnames)
         dataset_eval_train, _ = get_eval_dataset_and_transform(
             args.eval_dataset, args.eval_train_fnames
         )
@@ -508,6 +517,8 @@ def main(args):
             args.eval_dataset, args.eval_val_fnames
         )
     elif hasattr(args, "eval_path"):
+        print('path')
+        print(args.eval_path)
         dataset_eval, _ = get_eval_dataset_and_transform(
             args.eval_dataset, args.eval_path
         )

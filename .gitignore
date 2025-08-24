@@ -133,6 +133,8 @@ dmypy.json
 
 .vscode/
 output_dir/
+output_dirVEG/
+myenv/
 *.pth
 slurm_launch.sh
 wandb

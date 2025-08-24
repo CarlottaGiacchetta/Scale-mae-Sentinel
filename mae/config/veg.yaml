@@ -1,0 +1,13 @@
+data:
+  type: VEG
+  size: 1024
+  length: 100000
+  img_dir: "/leonardo_work/IscrC_UMC/fmoWSentinel/fmow-sentinel"
+  val_img_dir: "/leonardo_work/IscrC_UMC/fmoWSentinel/fmow-sentinel"
+  oversample: 1.5
+  mean: [1263.73947144, 1645.40315151, 1846.87040806]
+  std: [948.9819932 , 1108.06650639, 1258.36394548]
+  vis_factor: 6000
+  base_resolution: 1.0
+  channels: [4, 5, 6]
+

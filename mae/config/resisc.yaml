@@ -2,7 +2,7 @@ data:
   type: resisc
   # size: 224
   oversample: 1.0
-  img_dir: 'resisc45/train.txt'
+  img_dir: "/leonardo_scratch/fast/IscrC_UMC/NWPU_RESISC45/NWPU-RESISC45"
   mean: [0.368, 0.381, 0.3436]
   std: [0.2035, 0.1854, 0.1849]
   # actual mean/std, but imagenet numbers work a bit better
