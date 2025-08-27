@@ -29,15 +29,17 @@ def _common_build(channels_default: list[int], config: dict, args, transforms, n
     root_dir  = os.path.expandvars(dcfg.get("root_dir") or dcfg.get("img_dir") or os.path.dirname(csv_train))
     oversample = float(dcfg.get("oversample", 1.0))
 
-    # canali: prendi quelli del config se presenti, altrimenti default del profilo
     channels = dcfg.get("channels", channels_default)
 
+    start_dataset = time.time()
     # Dataset
     dataset = FMOWSentinelDataset(
         csv_path=csv_train,
         root_dir=root_dir,
         split="train",
     )
+    dataset_time = time.time() - start_dataset
+    print(f'tempo caricamento dataset: {dataset_time:.2f} secondi')
 
     # Sampler DDP classico
     sampler = DistributedSampler(

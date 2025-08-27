@@ -207,12 +207,15 @@ def get_dataset_and_sampler(
                 TransformCollateFnLabel(transforms, args.base_resolution),
             )
     elif dataset_type in ("fmow_sentinel", "fmow-sentinel", "fmowsentinel"):
+        print('creazione dataset fmow_sentinel')
         return build_fmow_sentinel_sampler(config, args, transforms, num_replicas, rank)
 
     elif dataset_type in ("veg","VEG"):   # accetta anche type: VEG
+        print('creazione dataset veg')
         return build_fmow_veg_sampler(config, args, transforms, num_replicas, rank)
 
     elif dataset_type in ("geo","GEO"):   # accetta anche type: GEO
+        print('creazione dataset geo')
         return build_fmow_geo_sampler(config, args, transforms, num_replicas, rank)
     else:
         raise NotImplementedError

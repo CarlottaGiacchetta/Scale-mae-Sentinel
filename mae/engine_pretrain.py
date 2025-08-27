@@ -11,11 +11,12 @@
 import math
 import sys
 from typing import Iterable
+import time
 
 import torch
 import util.lr_sched as lr_sched
 import util.misc as misc
-from wandb_log import wandb_dump_input_output, wandb_log_metadata
+#from wandb_log import wandb_dump_input_output, wandb_log_metadata
 
 
 def train_one_epoch(
@@ -33,6 +34,10 @@ def train_one_epoch(
 ):
     model.train(True)
 
+    total_load_time = 0.0
+    total_forward_time = 0.0
+    total_wand_time = 0.0
+
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", misc.SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = f"Epoch: [{epoch}]"
@@ -48,6 +53,16 @@ def train_one_epoch(
     for data_iter_step, ((samples, res, targets, target_res), metadata) in enumerate(
         metric_logger.log_every(data_loader, print_freq, header)
     ):
+        # === TIMING CARICAMENTO DATALOADER ===
+        if data_iter_step == 0:
+            prev_time = time.time()
+        else:
+            load_time = time.time() - prev_time
+            total_load_time += load_time
+            #print(f"[Iter {data_iter_step}] Tempo caricamento batch = {load_time:.3f} s")
+            prev_time = time.time()
+        # === FINE TIMING CARICAMENTO DATALOADER ===
+
         # we use a per iteration (instead of per epoch) lr scheduler
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(
@@ -56,6 +71,8 @@ def train_one_epoch(
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
+        
+        start_fwd = time.time()
         with torch.cuda.amp.autocast():
             target_size = scheduler.get_target_size(epoch)
             source_size = source_size_scheduler.get_target_size(epoch)[0]
@@ -70,8 +87,14 @@ def train_one_epoch(
                 mask_ratio=args.mask_ratio,
                 source_size=source_size,
             )
+        forward_time = time.time() - start_fwd
+        #print(f"[Iter {data_iter_step}] Tempo forward batch = {forward_time:.3f} s")
+        total_forward_time += forward_time
+        
 
-        if data_iter_step % print_freq == 0:
+        # === FINE MISURAZIONE TEMPO FORWARD ===
+
+        '''if data_iter_step % print_freq == 0:
             y = [
                 model.module.unpatchify(y_i)[0].permute(1, 2, 0).detach().cpu()
                 for y_i in y
@@ -83,8 +106,15 @@ def train_one_epoch(
                 epoch,
                 f"target-size:{target_size}-output_size:{fix_decoding_size}",
             )
+            
+
             if metadata:
-                wandb_log_metadata(metadata)
+                wandb_log_metadata(metadata)'''
+        
+        
+        if data_iter_step % 50 == 0 and data_iter_step > 0:
+            print(f"[Iter {data_iter_step}] load medio={total_load_time/data_iter_step:.3f}s | forward medio={total_forward_time/data_iter_step:.3f}s")
+        prev_end = time.time()
 
         loss_value = loss.item()
 

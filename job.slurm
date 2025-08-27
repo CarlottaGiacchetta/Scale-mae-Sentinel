@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --partition=boost_usr_prod
 #SBATCH --qos=boost_qos_lprod
-#SBATCH -N 3
+#SBATCH -N 1
 #SBATCH --gpus-per-node=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
@@ -19,7 +19,7 @@ export SLURM_CPU_BIND=cores
 
 # ===== PATH PROGETTO =====
 cd /leonardo/home/userexternal/cgiacche/unicc/scale-mae
-mkdir -p logs output_dirVEG/logs
+#mkdir -p logs output_dirVEG/logs
 
 # ===== SCRATCH / TMP / W&B =====
 SCR_BASE="${CINECA_SCRATCH:-${SCRATCH:-/leonardo_scratch/$USER}}"
@@ -70,6 +70,6 @@ srun --ntasks-per-node=1 bash -lc "
       --config mae/config/veg.yaml \
       --eval_train_fnames /leonardo_scratch/fast/IscrC_UMC/NWPU-RESISC45/NWPU-RESISC45 \
       --eval_val_fnames   /leonardo_scratch/fast/IscrC_UMC/NWPU-RESISC45/NWPU-RESISC45 \
-      --output_dir ./output_dirVEG \
-      --log_dir    ./output_dirVEG/logs
+      --output_dir ${OUTPUT_DIR} \
+      --log_dir    ${LOG_DIR}
 "

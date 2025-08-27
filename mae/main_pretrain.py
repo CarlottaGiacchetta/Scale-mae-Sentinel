@@ -50,7 +50,7 @@ from util.resolution_sched import (
     get_source_size_scheduler,
     get_target_size_scheduler,
 )
-from wandb_log import WANDB_LOG_IMG_CONFIG
+#from wandb_log import WANDB_LOG_IMG_CONFIG
 
 Image.MAX_IMAGE_PIXELS = 1000000000
 
@@ -234,6 +234,11 @@ def get_args_parser():
         help="path where to save, empty for no saving",
     )
     parser.add_argument(
+        "--pretrained",
+        default="",
+        help="path to the pretrained model",
+    )
+    parser.add_argument(
         "--log_dir", default="./output_dir", help="path where to tensorboard log"
     )
     parser.add_argument(
@@ -386,6 +391,38 @@ def get_args_parser():
 
     return parser
 
+def load_pretrained_only(model, ckpt_path, skip_substrings=("pos_embed","decoder_pos_embed")):
+    if not ckpt_path:
+        return
+    if not os.path.isfile(ckpt_path):
+        print(f"[pretrained] file non trovato: {ckpt_path}")
+        return
+
+    print(f"[pretrained] carico pesi da: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    sd = ckpt.get("model", ckpt.get("state_dict", ckpt))
+    # strip 'module.' se presente
+    sd = { (k[7:] if k.startswith("module.") else k): v for k, v in sd.items() }
+
+    msd = model.state_dict()
+    to_load, skipped = {}, []
+
+    for k, v in sd.items():
+        if any(s in k for s in skip_substrings):
+            skipped.append((k, "skip(pos_embed)"))
+            continue
+        if k not in msd:
+            skipped.append((k, "unexpected"))
+            continue
+        if msd[k].shape != v.shape:
+            skipped.append((k, f"shape_mismatch {tuple(v.shape)} -> {tuple(msd[k].shape)}"))
+            continue
+        to_load[k] = v
+
+    missing = [k for k in msd.keys() if k not in to_load]
+    model.load_state_dict(to_load, strict=False)
+    print(f"[pretrained] loaded={len(to_load)} | skipped={len(skipped)} | missing={len(missing)}")
+
 
 @record
 def main(args):
@@ -420,7 +457,7 @@ def main(args):
             ), "Decoder resolution must be a multiple of patch size (16)"
 
         # set a random wandb id before fixing random seeds
-        random_wandb_id = wandb.util.generate_id()
+        #random_wandb_id = wandb.util.generate_id()
 
         print(f"job dir: {os.path.dirname(os.path.realpath(__file__))}")
         print(f"{args}".replace(", ", ",\n"))
@@ -430,12 +467,12 @@ def main(args):
         args.data_config = config  # save on args so that it's prop'd to wandb
         print(args.data_config)
         
-        WANDB_LOG_IMG_CONFIG.mean = np.array(config["data"]["mean"])
+        '''WANDB_LOG_IMG_CONFIG.mean = np.array(config["data"]["mean"])
         WANDB_LOG_IMG_CONFIG.std = np.array(config["data"]["std"])
         WANDB_LOG_IMG_CONFIG.factor = config["data"]["vis_factor"]
         
         if config["data"]["channels"]:
-            WANDB_LOG_IMG_CONFIG.channels = np.array(config["data"]["channels"])
+            WANDB_LOG_IMG_CONFIG.channels = np.array(config["data"]["channels"])'''
             
             
 
@@ -595,6 +632,18 @@ def main(args):
         progressive=args.progressive,
     )
 
+    
+
+    # --- PRETRAIN HOOK (solo pesi) ---
+    pretrained_path = getattr(args, "pretrained", None)
+    if not getattr(args, "resume", None) and pretrained_path:
+        print('Non faccio resume e ho il pretrained path')
+        if hasattr(args, "no_autoresume"):
+            print('Non faccio autoresume')
+            args.no_autoresume = True
+        load_pretrained_only(model, pretrained_path)  # funzione definita in main_pretrain.py o utils
+    # ----------------------------------
+
     model.to(device)
 
     model_without_ddp = model
@@ -635,12 +684,12 @@ def main(args):
     # breakpoint()
 
     if misc.is_main_process() and not args.eval_only:
-        if not args.wandb_id:
-            args.wandb_id = random_wandb_id
+        '''if not args.wandb_id:
+            args.wandb_id = random_wandb_id'''
 
         tag = "encoder-decoder"
 
-        wandb_args = dict(
+        '''wandb_args = dict(
             project="multiscale_mae",
             entity="bair-climate-initiative",
             id=args.wandb_id,
@@ -651,7 +700,7 @@ def main(args):
         if args.name:
             wandb_args.update(dict(name=args.name))
 
-        wandb.init(**wandb_args)
+        wandb.init(**wandb_args)'''
 
         print(f"Start training for {args.epochs} epochs")
         print("Model = %s" % str(model_without_ddp))
@@ -667,6 +716,7 @@ def main(args):
             (epoch % args.knn_eval_freq == 0 or epoch == args.epochs) or args.eval_only
         ) and not args.skip_knn_eval:
             eval_res = {}
+            print(f"\n\n\nMODELLOOOO {args.model}\n\n\n")
             for eval_scale in args.eval_scale:
                 eval_res[eval_scale] = kNN(
                     cmd_args=args,
@@ -683,13 +733,13 @@ def main(args):
                 )
                 if misc.is_main_process():
                     print(f"eval results ({eval_scale}): {eval_res[eval_scale]}")
-                    if not args.eval_only:
+                    '''if not args.eval_only:
                         wandb.log(
                             {
                                 f"knn-acc-{eval_scale}": eval_res[eval_scale] * 100.0,
                                 "epoch": epoch,
                             }
-                        )
+                        )'''
 
             if args.eval_only or epoch == args.epochs:
                 break
@@ -743,13 +793,13 @@ def main(args):
                 os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8"
             ) as f:
                 f.write(json.dumps(log_stats) + "\n")
-            wandb.log(log_stats)
+            #wandb.log(log_stats)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print(f"Training time {total_time_str}")
-    if misc.is_main_process():
-        wandb.finish()
+    '''if misc.is_main_process():
+        wandb.finish()'''
 
     return eval_res
 
