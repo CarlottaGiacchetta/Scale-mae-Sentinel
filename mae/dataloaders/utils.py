@@ -8,6 +8,7 @@ import rasterio
 import numpy as np
 from torch.utils.data import Dataset
 from PIL import Image
+import time
 
 from .airound import AIROUND_DATASET_STATS
 from .cvbrct import CVBRCT_DATASET_STATS
@@ -130,7 +131,6 @@ def get_dataset_and_sampler(
     linprobe_finetune=False,
 ):
     dataset_type = config["data"]["type"]
-    print(dataset_type)
     if dataset_type == "NAIP":
         return build_naip_sampler(config, args, num_replicas, rank, transforms)
     elif dataset_type == "SENTINEL2":
@@ -208,11 +208,12 @@ def get_dataset_and_sampler(
             )
     elif dataset_type in ("fmow_sentinel", "fmow-sentinel", "fmowsentinel"):
         print('creazione dataset fmow_sentinel')
-        return build_fmow_sentinel_sampler(config, args, transforms, num_replicas, rank)
+        return build_fmow_sentinel_sampler(config, args, transforms_init, num_replicas, rank)
 
     elif dataset_type in ("veg","VEG"):   # accetta anche type: VEG
         print('creazione dataset veg')
-        return build_fmow_veg_sampler(config, args, transforms, num_replicas, rank)
+        print(f'transforms: {transforms}')
+        return build_fmow_veg_sampler(config, args,  transforms, num_replicas, rank)
 
     elif dataset_type in ("geo","GEO"):   # accetta anche type: GEO
         print('creazione dataset geo')
@@ -283,7 +284,6 @@ def get_eval_dataset_and_transform(
         if os.path.isdir(eval_dataset_path):
             dataset_eval = ImageFolder(eval_dataset_path, transform=transform_eval)
         else:
-            print(eval_dataset_path)
             dataset_eval = ImageList(eval_dataset_path, transform=transform_eval)
 
     elif eval_dataset_id == "fmow":

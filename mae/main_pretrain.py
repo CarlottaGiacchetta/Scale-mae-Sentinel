@@ -20,6 +20,7 @@ from re import L
 import numpy as np
 import timm
 import torch
+import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torchvision.transforms as tv_transforms
 import wandb
@@ -62,7 +63,7 @@ def get_args_parser():
     )
     parser.add_argument(
         "--batch_size",
-        default=32,
+        default=128,
         type=int,
         help="Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus",
     )
@@ -258,7 +259,7 @@ def get_args_parser():
     parser.add_argument(
         "--start_epoch", default=0, type=int, metavar="N", help="start epoch"
     )
-    parser.add_argument("--num_workers", default=10, type=int)
+    parser.add_argument("--num_workers", default=4, type=int)
     parser.add_argument(
         "--pin_mem",
         action="store_true",
@@ -465,8 +466,8 @@ def main(args):
         with open(args.config) as f:
             config = yaml.safe_load(f.read())
         args.data_config = config  # save on args so that it's prop'd to wandb
-        print(args.data_config)
-        
+        print("data config: ", args.data_config)
+
         '''WANDB_LOG_IMG_CONFIG.mean = np.array(config["data"]["mean"])
         WANDB_LOG_IMG_CONFIG.std = np.array(config["data"]["std"])
         WANDB_LOG_IMG_CONFIG.factor = config["data"]["vis_factor"]
@@ -476,7 +477,8 @@ def main(args):
             
             
 
-        if config["data"]["type"] in ["fmow"] or config["data"]["type"] in ["veg"] or config["data"]["type"] in ["geo"] :
+        if config["data"]["type"] in ["fmow"] :
+            print('fmow')
             # We read in an image from PIL and crop an area twice the size of input size
             # transforms_train crops it down to a the proper target_size
             transforms_init = tv_transforms.Compose(
@@ -499,6 +501,9 @@ def main(args):
 
         # We will pass in the largest target_size to RRC
         target_size = max(args.target_size)
+        print(f' Target size: {target_size}')
+        print(f' Input size: {args.input_size}')
+        
         transforms_train = CustomCompose(
             rescale_transform=K.RandomResizedCrop(
                 (target_size, target_size),
@@ -510,7 +515,7 @@ def main(args):
             other_transforms=other_transforms,
             src_transform=K.Resize((args.input_size, args.input_size)),
         )
-
+                
         dataset_train, sampler_train, train_collate = get_dataset_and_sampler(
             args,
             config,
@@ -746,6 +751,8 @@ def main(args):
 
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
+            print('\n\n\n')
+        print(transforms_train)
         train_stats = train_one_epoch(
             model,
             data_loader_train,
@@ -758,7 +765,9 @@ def main(args):
             scheduler=target_size_scheduler,
             source_size_scheduler=source_size_scheduler,
             fix_resolution_scheduler=output_size_scheduler,
+            gpu_transforms=transforms_train,   # <--- nuovo
         )
+
         if args.output_dir and (
             epoch % args.checkpoint_interval == 0 or epoch + 1 == args.epochs
         ):
