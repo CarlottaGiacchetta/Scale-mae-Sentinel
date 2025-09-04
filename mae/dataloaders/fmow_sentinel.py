@@ -17,6 +17,11 @@ from kornia.augmentation import AugmentationSequential
 from torchgeo.datasets import RasterDataset, stack_samples
 from torchgeo.samplers import Units
 
+import os, re, glob, bisect
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
 # ─────────────────────────────────────────────────────────
 # Costanti fMoW-Sentinel2 (13 bande) — prese dal tuo codice
 # ─────────────────────────────────────────────────────────
@@ -61,96 +66,17 @@ def _sentinel_vis_normalize(x: np.ndarray, mean: np.ndarray, std: np.ndarray) ->
     img = np.clip(img, 0, 255).astype(np.uint8)
     return img
 
-'''class FMOWSentinelDataset(Dataset):
-    """
-    Dataset fMoW-Sentinel2:
-    - Legge una CSV con colonne: category, location_id, image_id, timestamp (come nel tuo script)
-    - Costruisce il path: {split}/{category}/{category}_{loc}/{category}_{loc}_{img}.tif
-    - Ritorna un dict con:
-        - "image": Tensor float32 (C,H,W), 13 canali, non normalizzata (normalizza la collate via Kornia)
-        - "label": long (indice di categoria) — non usato nel pretrain MAE, ma utile per debug
-        - "path" , "image_id", "timestamp"
-    """
-    def __init__(
-        self,
-        csv_path: str,
-        root_dir: str | None = None,
-        split: str | None = None,
-        years: list[int] | None = None,
-        categories: list[str] | None = None,
-    ):
-        super().__init__()
-        self.df = pd.read_csv(csv_path)
-
-        print(csv_path, root_dir)
-
-        # Deduce split dal nome file se non specificato
-        if split is None:
-            name = os.path.basename(csv_path).lower()
-            split = "train" if "train" in name else ("val" if "val" in name else "test")
-        self.split = split
-
-        # root_dir: se non passato, usa cartella accanto alla CSV "fmow-sentinel"
-        if root_dir is None:
-            root_dir = os.path.join(os.path.dirname(csv_path), "fmow-sentinel")
-        self.root_dir = root_dir
-
-        # Filtri opzionali
-        if categories is not None and len(categories) > 0:
-            # mantieni solo le righe con category in lista
-            self.df = self.df[self.df["category"].isin(categories)]
-            self.categories = categories
-        else:
-            self.categories = CATEGORIES
-
-        if years is not None and len(years) > 0 and "timestamp" in self.df.columns:
-            self.df["year"] = self.df["timestamp"].astype(str).str.slice(0, 4).astype(int)
-            self.df = self.df[self.df["year"].isin(years)]
-
-        # Indici stabili
-        self.df = self.df.reset_index(drop=True)
-
-    def __len__(self) -> int:
-        return len(self.df)
-
-    def _build_image_path(self, row) -> str:
-        cat = row["category"]
-        loc = int(row["location_id"])
-        img = int(row["image_id"])
-        rel = f"{self.split}/{cat}/{cat}_{loc}/{cat}_{loc}_{img}.tif"
-        return os.path.join(self.root_dir, rel)
-
-    def _open_tif(self, path: str) -> np.ndarray:
-        with rasterio.open(path) as src:
-            arr = src.read()  # (C,H,W)
-        # -> (H,W,C) float32
-        return arr.transpose(1, 2, 0).astype(np.float32)
-
-    def __getitem__(self, idx: int):
-        
-
-        row = self.df.iloc[idx]
-        p = self._build_image_path(row)
-        np_img = self._open_tif(p)  # (H,W,C=13)
-        # To torch (C,H,W) float32
-        img = torch.from_numpy(np_img).permute(2, 0, 1).contiguous()
-        img = F.interpolate(img.unsqueeze(0),
-                    size=(224, 224),
-                    mode='bilinear', align_corners=False).squeeze(0)
-
-
-        y = int(CATEGORIES.index(row["category"])) if row["category"] in CATEGORIES else -1
-        return {
-            "image": img,  # (13,H,W) float32, nessuna normalizzazione qui
-            "label": torch.tensor(y, dtype=torch.long),
-            "image_id": int(row["image_id"]),
-            "timestamp": row.get("timestamp", ""),
-            "path": p,
-        }
-'''
 
 _S2_BANDS = ["B01","B02","B03","B04","B05","B06","B07","B08","B8A","B09","B10","B11","B12"]
 
+_SPAN_RE = re.compile(r'.*processed_(\d+)_(\d+)\.npy$')
+
+def _parse_span(path: str) -> tuple[int, int]:
+    m = _SPAN_RE.match(os.path.basename(path))
+    if not m:
+        raise ValueError(f"Nome file non conforme: {path}")
+    s, e = int(m.group(1)), int(m.group(2))
+    return s, e
 
 def _normalize_channels(channels):
     """
@@ -209,12 +135,13 @@ class FMOWSentinelDataset(Dataset):
         super().__init__()
         self.df = pd.read_csv(csv_path)
         self.band_idx = _normalize_channels(channels)  # <— indici 1-based per rasterio
-
+        #self.data = None
         # deduci split da filename se non passato
         if split is None:
             name = os.path.basename(csv_path).lower()
             split = "train" if "train" in name else ("val" if "val" in name else "test")
         self.split = split
+        
 
         if root_dir is None:
             root_dir = os.path.join(os.path.dirname(csv_path), "fmow-sentinel")
@@ -231,9 +158,19 @@ class FMOWSentinelDataset(Dataset):
             self.df = self.df[self.df["year"].isin(years)]
 
         self.df = self.df.reset_index(drop=True)
+        #self.preload_data() #se usi Cache
 
     def __len__(self) -> int:
         return len(self.df)
+    
+    def preload_data(self):
+        file_names = [self._build_image_path(row) for idx, row in self.df.iterrows()]
+        from multiprocessing import Pool
+        from tqdm import tqdm
+        with Pool() as pool:
+            self.cache = list(tqdm(pool.imap(self._read_bands, file_names), total=len(file_names)))
+        print('CARICAMENTO FATTO ', len(self.cache), (len(file_names)))
+
 
     def _build_image_path(self, row) -> str:
         cat = row["category"]
@@ -248,16 +185,34 @@ class FMOWSentinelDataset(Dataset):
             arr = src.read(indexes=self.band_idx, out_dtype="float32")  # (C,H,W)
         return arr
 
+    def __getitemCACHE__(self, idx: int):
+
+        arr = self.cache[idx]
+        img = torch.from_numpy(arr)  # (C,H,W) float32
+
+        
+        img = F.interpolate(img.unsqueeze(0), size=(224,224), mode='bilinear', align_corners=False).squeeze(0)
+
+        y = int(CATEGORIES.index(row["category"])) if row["category"] in CATEGORIES else -1
+        return {
+            "image": img,           # (C_selected,H,W) float32
+            "label": torch.tensor(y, dtype=torch.long),
+            "image_id": int(row["image_id"]),
+            "timestamp": row.get("timestamp", ""),
+            "path": p,
+        }
+
     def __getitem__(self, idx: int):
         row = self.df.iloc[idx]
         p = self._build_image_path(row)
+        
+        '''if self.data is None: 
+            # (C,H,W) già float32 e nel giusto ordine; NO transpose/permute doppie
+            self.data = self._read_bands(p)'''
 
-        # (C,H,W) già float32 e nel giusto ordine; NO transpose/permute doppie
         arr = self._read_bands(p)
+        
         img = torch.from_numpy(arr)  # (C,H,W) float32
-
-        # ⛔ Consiglio: NON interpolare qui. Falle su GPU nei transforms.
-        # Se proprio vuoi tenerlo qui, decommenta:
         img = F.interpolate(img.unsqueeze(0), size=(224,224), mode='bilinear', align_corners=False).squeeze(0)
 
         y = int(CATEGORIES.index(row["category"])) if row["category"] in CATEGORIES else -1
@@ -270,68 +225,8 @@ class FMOWSentinelDataset(Dataset):
         }
 
 
-'''class FMOWSentinelCollateFn:
-    """
-    Collate compatibile con ScaleMAE:
-    - Stacca batch (B,C,H,W)
-    - Seleziona canali da config["data"]["channels"] (indici 0-based)
-    - Applica pipeline Kornia (CustomCompose) con validmask fittizia
-    - Produce (inputs, aux) come atteso da engine_pretrain/train_one_epoch:
-        inputs = get_inputs_outputs(imgs_src, imgs_src_res, imgs, res)
-        aux = dict(zero_ratio=..., valid_masks=...)
-    """
-    def __init__(
-        self,
-        transforms: AugmentationSequential,
-        channels: list[int] | None,
-        over_sample_factor: float,
-        base_resolution: float,
-    ):
-        self.transforms = transforms
-        self.channels = channels
-        self.over_sample_factor = max(1.0, float(over_sample_factor))
-        self.base_resolution = float(base_resolution)
-
-    def __call__(self, samples: list[dict[str, torch.Tensor]]):
-        # Stack immagini
-        imgs = torch.stack([s["image"] for s in samples], dim=0)  # (B,C,H,W)
-        B, C, H, W = imgs.shape
-
-        # Selezione canali (se specificata in config)
-        if self.channels is not None and len(self.channels) > 0:
-            imgs = imgs[:, self.channels, :, :]
-            C = imgs.shape[1]
 
 
-        imgs = imgs.float()
-
-        # valid mask piena (come shape (B,C,H,W) per matchare il codice esistente)
-        valid_masks = torch.ones((B, C, H, W), dtype=torch.uint8, device=imgs.device)
-
-        # Oversampling per batch più grande "logico" (come Sentinel2StackSampleCollateFn)
-        tgt_b = int(B / self.over_sample_factor)
-        if tgt_b <= 0:
-            tgt_b = B
-        # nessuna euristica zero_ratio: prendiamo i primi tgt_b
-        imgs = imgs[:tgt_b].contiguous()
-        valid_masks = valid_masks[:tgt_b].contiguous()
-
-        # Applica pipeline Kornia (ritorna img_tgt, img_src, ratios, zero_ratio, valid_masks)
-        imgs_tgt, imgs_src, ratios, zero_ratio, valid_masks = self.transforms(
-            imgs, valid_masks
-        )
-
-        # risoluzione effettiva (ratio è crop_dim / original_dim -> res = ratio * base_res)
-        res = ratios * self.base_resolution
-        imgs_src_res = res * (imgs_tgt.shape[-1] / imgs_src.shape[-1])
-
-        # Confeziona inputs per MAE
-        inputs = get_inputs_outputs(imgs_src, imgs_src_res, imgs_tgt, res)
-        aux = dict(zero_ratio=zero_ratio, valid_masks=valid_masks)
-        return inputs, aux'''
-
-
-import torch
 
 class FMOWSentinelCollateFn:
     def __init__(self, transforms, channels, over_sample_factor, base_resolution: float):
@@ -398,8 +293,83 @@ class FMOWSentinelCollateFn:
         return get_inputs_outputs(imgs_src, imgs_src_res, imgs, res), dict(
             zero_ratio=zero_ratio, valid_masks=valid_masks
         )
+ 
 
+class PreprocessedChunks(Dataset):
+    def __init__(
+        self,
+        root: str,
+        pattern: str = "*processed_*_*.npy",   # matcha anche 'preprocessed_*.npy'
+        to_float32: bool = True,
+        expand_2d: bool = True,
+        mmap: bool = True,
+    ):
+        self.root = root
+        self.files = sorted(
+            glob.glob(os.path.join(root, pattern)),
+            key=lambda p: _parse_span(p)[0]
+        )
+        print("numero di file trovati:", len(self.files))
+        if not self.files:
+            raise FileNotFoundError(f"Nessun file in {root} con pattern {pattern}")
 
+        self.to_float32 = bool(to_float32)
+        self.expand_2d = bool(expand_2d)
+        self.mmap_mode = "r" if mmap else None
+
+        # --- lunghezze reali per file (solo header, è veloce) ---
+        self.lengths = []
+        for fp in self.files:
+            arr = np.load(fp, mmap_mode="r")  # non carica i dati, solo header
+            n = int(arr.shape[0])
+            self.lengths.append(n)
+            del arr
+
+        # indice cumulativo: starts[i] = indice globale di inizio del file i
+        # es: [0, n0, n0+n1, ..., totale]
+        self.starts = np.cumsum([0] + self.lengths).tolist()
+        self.total_len = self.starts[-1]
+
+        # cache del chunk corrente
+        self._cur_file_idx = -1
+        self.data = None
+
+    def __len__(self) -> int:
+        return int(self.total_len)
+
+    def _load_chunk(self, file_idx: int):
+        arr = np.load(self.files[file_idx], mmap_mode=self.mmap_mode)
+        # (N,H,W) -> (N,1,H,W)
+        if arr.ndim == 3 and self.expand_2d:
+            arr = arr[:, None, :, :]
+        # dtype
+        if self.to_float32 and arr.dtype != np.float32:
+            arr = arr.astype(np.float32, copy=False)
+        self.data = arr
+        self._cur_file_idx = file_idx
+
+    def __getitem__(self, idx: int):
+        if idx < 0 or idx >= self.total_len:
+            raise IndexError
+
+        # trova il file giusto: starts[file_idx] <= idx < starts[file_idx+1]
+        file_idx = bisect.bisect_right(self.starts, idx) - 1
+        in_file_idx = idx - self.starts[file_idx]
+
+        if file_idx != self._cur_file_idx or self.data is None:
+            self._load_chunk(file_idx)
+
+        # slice dalla memmap; assicurati che sia contiguo prima di passare a torch
+        x = np.ascontiguousarray(self.data[in_file_idx])
+        x = torch.from_numpy(x)  # (C,H,W) o (1,H,W)
+
+        return {
+            "image": x,
+            "label": -1,
+            "image_id": int(idx),                 # id globale univoco
+            "timestamp": "",
+            "path": self.files[file_idx],
+        }
 
 
 # ─────────────────────────────────────────────────────────

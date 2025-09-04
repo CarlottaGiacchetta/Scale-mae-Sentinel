@@ -10,6 +10,7 @@ from torchgeo.samplers import Units
 from dataloaders.fmow_sentinel import (
     FMOWSentinelDataset,
     FMOWSentinelCollateFn,
+    PreprocessedChunks
 )
 
 def _infer_csv_from_dir(dcfg: dict) -> str:
@@ -45,6 +46,7 @@ def _common_build(channels_default: list[int], config: dict, args, transforms, n
         split="train",
         channels=channels
     )
+    #dataset = PreprocessedChunks(root="/leonardo_scratch/fast/IscrC_UMC/fmoWSentinel/preprocessed")
     dataset_time = time.time() - start_dataset
     print(f'tempo caricamento dataset: {dataset_time:.2f} secondi')
 
@@ -53,18 +55,10 @@ def _common_build(channels_default: list[int], config: dict, args, transforms, n
         dataset,
         num_replicas=num_replicas,
         rank=rank,
-        shuffle=True,
-        #drop_last=True,
+        shuffle=False,
+        drop_last=False,
     )
-    '''
-    sampler = DistributedRandomGeoSampler(
-        dataset,
-        size=dcfg["size"],
-        length=int(dcfg["length"] * over_sample_factor),
-        units=Units.PIXELS,
-        num_replicas=num_replicas,
-        rank=rank,
-    )'''
+    
 
 
     # Collate compatibile con il resto del framework

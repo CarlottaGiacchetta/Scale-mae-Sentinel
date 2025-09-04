@@ -4,6 +4,8 @@ import torch
 import util.lr_sched as lr_sched
 import util.misc as misc
 from lib.transforms import get_inputs_outputs  # se serve altrove
+import os
+import numpy as np
 
 def train_one_epoch(
     model: torch.nn.Module,
@@ -55,6 +57,25 @@ def train_one_epoch(
     for data_iter_step, ((samples, res, targets, target_res), metadata) in enumerate(
         metric_logger.log_every(data_loader, print_freq, header)
     ):
+        '''  
+        
+        for data_iter_step, batch in enumerate(data_loader):
+        start = data_iter_step * args.batch_size
+        end = start + args.batch_size
+        if start == 426752:
+            aa = True
+        if aa:
+            (samples, res, targets, target_res), metadata = batch
+            arr = samples.detach().numpy()
+
+
+            
+            out_path = os.path.join("/leonardo_scratch/fast/IscrC_UMC/fmoWSentinel/preprocessed2", f"preprocessed_{start}_{end}.npy")
+            np.save(out_path, arr)
+
+            print(f"[OK] Salvato {out_path}  | shape={arr.shape}  ")
+        
+        ''' 
         # ===== 1) attesa dataloader =====
         data_wait = time.time() - end
         totals["data"] += data_wait
@@ -75,13 +96,6 @@ def train_one_epoch(
         target_res = target_res.to(device, non_blocking=True).float()
         totals["h2d"] += (time.time() - t0)
 
-        # ===== 3) (opz.) aug su GPU =====
-        if gpu_transforms is not None:
-            t0 = time.time()
-            # Se le aug vogliono fp32, toglile da autocast; altrimenti vanno bene in BF16
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                samples = gpu_transforms(samples)
-            totals["gpu_aug"] += (time.time() - t0)
 
         # ===== 4) Forward + Backward (con no_sync ai micro-step) =====
         update_now = ((data_iter_step + 1) % accum_iter == 0)
@@ -177,8 +191,12 @@ def train_one_epoch(
                 f"zero={totals['zero']/denom:.3f}s | "
                 f"iter={totals['iter']/denom:.3f}s"
             )
+      
+
+          
 
     # ===== 8) average =====
+    
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
 

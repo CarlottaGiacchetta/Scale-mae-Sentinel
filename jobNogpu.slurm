@@ -1,13 +1,10 @@
 #!/bin/bash
-#SBATCH --partition=boost_usr_prod
-#SBATCH --qos=boost_qos_lprod
+#SBATCH --partition=lrd_all_serial
+#SBATCH --qos=normal
 #SBATCH -N 1
-#SBATCH --gpus-per-node=4
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
-# === MEMORIA: scegli UNA delle due righe seguenti ===
-#SBATCH --mem-per-gpu=40G          # 40G * 4 GPU = 160G di RAM per nodo
-# #SBATCH --mem=160G               # <-- usa questa se --mem-per-gpu non è supportato
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=30G
 #SBATCH -t 04:00:00
 #SBATCH -o logs/%x_%j.out
 #SBATCH -e logs/%x_%j.err
@@ -61,15 +58,13 @@ NNODES="${SLURM_NNODES:-1}"
 # ===== LANCIO =====
 srun --ntasks-per-node=1 bash -lc "
   source myenv/bin/activate
-  torchrun \
-    --nproc_per_node=${GPUS_PER_NODE} \
-    --nnodes=${NNODES} \
-    --rdzv_backend=c10d \
-    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-    mae/main_pretrain.py \
+  python mae/main_pretrain.py \
       --config mae/config/veg.yaml \
       --eval_train_fnames /leonardo_scratch/fast/IscrC_UMC/NWPU-RESISC45/NWPU-RESISC45 \
       --eval_val_fnames   /leonardo_scratch/fast/IscrC_UMC/NWPU-RESISC45/NWPU-RESISC45 \
       --output_dir ${OUTPUT_DIR} \
-      --log_dir    ${LOG_DIR}
+      --log_dir    ${LOG_DIR} \
+      --dataset_only \
+      --device cpu \
+      --num_workers 0 \
 "
