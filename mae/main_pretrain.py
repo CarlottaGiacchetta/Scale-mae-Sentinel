@@ -71,7 +71,7 @@ def get_args_parser():
     )
     parser.add_argument(
         "--knn_eval_freq",
-        default=5,
+        default=50,
         type=int,
         help="How often (epochs) to run knn eval",
     )
@@ -83,7 +83,7 @@ def get_args_parser():
     parser.set_defaults(skip_knn_eval=False)
 
     parser.add_argument(
-        "--print_freq", default=20, type=int, help="How often (iters) print results to wandb",
+        "--print_freq", default=100, type=int, help="How often (iters) print results to wandb",
     )
 
     parser.add_argument(
@@ -109,7 +109,7 @@ def get_args_parser():
     # Model parameters
     parser.add_argument(
         "--model",
-        default="mae_vit_base_patch16",
+        default="mae_vit_large_patch16",
         type=str,
         metavar="MODEL",
         help="Name of model to train",

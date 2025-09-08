@@ -168,10 +168,10 @@ def train_one_epoch(
         metric_logger.update(lr=lr)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
-        if log_writer is not None and update_now:
+        '''if log_writer is not None and update_now:
             epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
             log_writer.add_scalar("train_loss", loss_value_reduce, epoch_1000x)
-            log_writer.add_scalar("lr", lr, epoch_1000x)
+            log_writer.add_scalar("lr", lr, epoch_1000x)'''
 
         # ===== 7) tempo iter =====
         totals["iter"] += (time.time() - iter_start)
